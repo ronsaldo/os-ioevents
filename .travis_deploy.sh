@@ -51,6 +51,6 @@ tar -cvvzf $ARCHIVE_NAME $PROJECT_NAME
 if test "$BINTRAY_APIKEY" != ""; then
     echo "===================================================================="
     echo "Uploading archive $ARCHIVE_NAME into bintray version $VERSION_NAME"
-    curl -T "$ARCHIVE_NAME" -uronsaldo:$BINTRAY_APIKEY "https://api.bintray.com/content/ronsaldo/os_ioevents/lib/${VERSION_NAME}/${ARCHIVE_NAME}?publish=1"
+    curl -T "$ARCHIVE_NAME" -uronsaldo:$BINTRAY_APIKEY "https://api.bintray.com/content/ronsaldo/os-ioevents/lib/${VERSION_NAME}/${ARCHIVE_NAME}?publish=1"
     echo
 fi

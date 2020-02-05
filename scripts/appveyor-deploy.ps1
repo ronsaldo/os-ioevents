@@ -54,7 +54,7 @@ function deploy_variant($VARIANT)
 
         echo "===================================================================="
         echo "Uploading archive $ARCHIVE_NAME into bintray version $VERSION_NAME"
-        Invoke-RestMethod -InFile "$ARCHIVE_NAME" -Method Put -Credential $credential -Uri "https://api.bintray.com/content/ronsaldo/os_ioevents/lib/${VERSION_NAME}/${ARCHIVE_NAME}?publish=1"
+        Invoke-RestMethod -InFile "$ARCHIVE_NAME" -Method Put -Credential $credential -Uri "https://api.bintray.com/content/ronsaldo/os-ioevents/lib/${VERSION_NAME}/${ARCHIVE_NAME}?publish=1"
     }
 }
 
