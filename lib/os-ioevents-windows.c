@@ -126,7 +126,7 @@ os_ioevents_convertToWString(const char* string)
 	return wideBuffer;
 }
 
-#include "os_ioevents.c"
+#include "os-ioevents.c"
 
 OS_IOEVENTS_CORE_EXPORT int
 os_ioevents_isCapabilitySupported(os_ioevents_context_t* context, os_ioevents_capability_t capability)
