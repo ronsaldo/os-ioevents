@@ -103,18 +103,17 @@ OSIOFileSystemMonitorWatchedElement >> deliverProcessedEvent: processedEvent [
 
 	dispatcher deliverEvent: processedEvent.
 	isForMyself ifTrue: [
-		parentWatcher ifNotNil: [ :p | parentWatcher deliverProcessedEvent: processedEvent ]
+		parentWatcher ifNotNil: [ :p | parentWatcher deliverProcessedEvent: processedEvent ].
+		"Synthesize additional events, in case there are not supported by the underlying platform."
+		processedEvent isModify ifTrue: [ 
+			(fileReference exists
+			and: [ fileReference isDirectory not
+			and: [ (supportedEventMask anyMask: OS_IOEVENTS_FSMONITOR_EVENT_CLOSE_WRITE) not ]]) ifTrue: 	[
+			self deliverProcessedEvent: processedEvent asCloseWriteEvent
+			]
+		].
 	] ifFalse: [
 		dispatcher deliverChild: fileReference basename event: processedEvent		
-	].
-
-	"Synthesize additional events, in case there are not supported by the underlying platform."
-	processedEvent isModify ifTrue: [ 
-		(processedEvent fileReference exists
-		and: [ processedEvent fileReference isDirectory not
-		and: [ (supportedEventMask anyMask: OS_IOEVENTS_FSMONITOR_EVENT_CLOSE_WRITE) not ]]) ifTrue: [
-			self deliverProcessedEvent: processedEvent asCloseWriteEvent
-		]
 	].
 
 ]

@@ -93,7 +93,8 @@ OSIOFileSystemMonitor >> on: aPath when: anEvent do: aBlock [
 	OSIOEventsDriver isAvailable ifFalse: [ ^ OSIOEventsNullEventSubscription uniqueInstance ].
 	
 	watchedFileReference := aPath asFileReference asAbsolute.
-	(watchedFileReference isFile and: [anEvent isPreferredInParentFolder or:
+	(watchedFileReference isFile and: [
+		(anEvent isPreferredInParentFolder and: [OSIOEventsDriver uniqueInstance fsMonitorCanWatchDirectoryFileModifications ]) or:
 		[ OSIOEventsDriver uniqueInstance fsMonitorCanWatchFiles not]]) ifTrue: [
 		parent := watchedFileReference parent.
 		^ self on: parent element: watchedFileReference basename when: anEvent do: aBlock
