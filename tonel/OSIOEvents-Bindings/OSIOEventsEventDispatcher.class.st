@@ -137,7 +137,7 @@ OSIOEventsEventDispatcher >> subscribeEvent: anEventClass withAction: aBlock [
 			action: aBlock;
 			yourself.
 		perEventSubscriptions add: subscription.
-		self parentDispatcher ifNotNil: [ :pd | parentDispatcher incrementChildEventClassCount: anEventClass ].
+		self parentDispatcher ifNotNil: [ :pd | pd incrementChildEventClassCount: anEventClass ].
 		subscription
 	]
 ]
