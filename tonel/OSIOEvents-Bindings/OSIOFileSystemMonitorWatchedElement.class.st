@@ -179,9 +179,13 @@ OSIOFileSystemMonitorWatchedElement >> enqueueEventProcessing: rawEvent [
 
 { #category : #'events-processing' }
 OSIOFileSystemMonitorWatchedElement >> ensureChildWatcherFor: childName [
+	| childFileReference |
+	childFileReference := fileReference resolve: childName asFileReference.
+	childFileReference exists ifFalse: [ ^ nil ].
+	
 	childrenWatchers at: childName ifAbsentPut: [
 		| watcher |
-		watcher := OSIOFileSystemMonitor uniqueInstance for: childName.
+		watcher := OSIOFileSystemMonitor uniqueInstance for: childFileReference.
 		self assert: watcher parentWatcher isNil.
 		watcher parentWatcher: self.
 		watcher
