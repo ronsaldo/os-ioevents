@@ -9,7 +9,7 @@ Class {
 
 { #category : #'as yet unclassified' }
 OSIOProcessWritePipe >> bufferedStream [
-	^ OSIOEventsBufferedWriteStream on: self
+	^ ZnBufferedWriteStream on: self
 ]
 
 { #category : #accessing }
@@ -25,7 +25,7 @@ OSIOProcessWritePipe >> nextPutAll: aByteArray [
 
 { #category : #'as yet unclassified' }
 OSIOProcessWritePipe >> textStream [
-	^ (OSIOEventsUTF8TextWriteStream on: self bufferedStream)
+	^ (OSIOEventsLineFlushingWriteStream on: self bufferedStream)
 		flushOnNewLines: true;
 		yourself
 ]

@@ -94,6 +94,14 @@ OSIOProcess >> initializeWithDriver: aDriver handle: aHandle flags: flags [
 	]
 ]
 
+{ #category : #waiting }
+OSIOProcess >> kill [
+	mutex critical: [
+		handle ifNotNil: [ handle kill ]
+	].
+	self finish
+]
+
 { #category : #events }
 OSIOProcess >> signalPipe: pipeIndex [
 	(pipes at: pipeIndex + 1) signal
@@ -112,6 +120,14 @@ OSIOProcess >> stdin [
 { #category : #accessing }
 OSIOProcess >> stdout [
 	^ pipes at: OS_IOEVENTS_PIPE_INDEX_STDOUT + 1
+]
+
+{ #category : #waiting }
+OSIOProcess >> terminate [
+	mutex critical: [
+		handle ifNotNil: [ handle terminate ]
+	].
+	self finish
 ]
 
 { #category : #waiting }
