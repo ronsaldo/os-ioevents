@@ -90,7 +90,9 @@ typedef enum os_ioevents_pipe_index_e
 typedef enum os_ioevents_process_spawn_flags_e
 {
     OS_IOEVENTS_SPAWN_FLAGS_NONE = 0,
-    OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES = 1
+    OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES = (1<<0),
+	OS_IOEVENTS_SPAWN_FLAGS_OPEN_IN_PSEUDO_TERMINAL = (1<<1),
+	OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES_IN_PSEUDO_TERMINAL = (1<<2),
 } os_ioevents_process_spawn_flags_t;
 
 typedef enum os_ioevents_pipe_error_e
@@ -157,6 +159,8 @@ OS_IOEVENTS_CORE_EXPORT void os_ioevents_process_kill(os_ioevents_process_t *pro
 OS_IOEVENTS_CORE_EXPORT intptr_t os_ioevents_process_pipe_read(os_ioevents_process_t *process, os_ioevents_pipe_index_t pipe, void *buffer, size_t offset, size_t count);
 OS_IOEVENTS_CORE_EXPORT intptr_t os_ioevents_process_pipe_write(os_ioevents_process_t *process, os_ioevents_pipe_index_t pipe, const void *buffer, size_t offset, size_t count);
 OS_IOEVENTS_CORE_EXPORT const char *os_ioevents_process_pipe_getNamedEndpoint(os_ioevents_process_t* process, os_ioevents_pipe_index_t pipe);
+OS_IOEVENTS_CORE_EXPORT int os_ioevents_process_pipe_isATTY(os_ioevents_process_t* process, os_ioevents_pipe_index_t pipe);
+OS_IOEVENTS_CORE_EXPORT int os_ioevents_process_pipe_setTTYWindowSize(os_ioevents_process_t* process, os_ioevents_pipe_index_t pipe, int rows, int columns);
 
 /* File system monitors */
 OS_IOEVENTS_CORE_EXPORT os_ioevents_fsmonitor_handle_t *os_ioevents_fsmonitor_watchFile(os_ioevents_context_t *context, const char *path);

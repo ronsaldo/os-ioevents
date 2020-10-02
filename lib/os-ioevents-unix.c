@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <dlfcn.h>
+#include <termios.h>
+#include <sys/ioctl.h>
 
 #define OS_IOEVENTS_STDIN_PIPE_INDEX 0
 
@@ -446,7 +448,8 @@ struct os_ioevents_process_s
 
     int remainingPipes;
     int exitCode;
-
+    int stdioIsTTY;
+    int extraStdioIsTTY;
     union
     {
         struct
@@ -454,6 +457,7 @@ struct os_ioevents_process_s
             int stdinPipe;
             int stdoutPipe;
             int stderrPipe;
+
             int extraStdinPipe;
             int extraStdoutPipe;
             int extraStderrPipe;
@@ -523,25 +527,25 @@ os_ioevents_process_free(os_ioevents_process_t *process)
     if(!process)
         return;
 
-    /* TODO: Perform process clean up*/
+    /* Perform process clean up*/
     os_ioevents_context_t *context = process->context;
     os_ioevents_mutex_lock(&context->io.processListMutex);
     if(process->used)
     {
-        if(process->stdinPipe)
+        if(process->stdinPipe >= 0)
             os_ioevents_process_closePipeFD(process, process->stdinPipe);
-        if(process->stdoutPipe)
+        if(process->stdoutPipe >= 0)
             os_ioevents_process_closePipeFD(process, process->stdoutPipe);
-        if(process->stderrPipe)
+        if(process->stderrPipe >= 0)
             os_ioevents_process_closePipeFD(process, process->stderrPipe);
 
         if(process->flags & OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES)
         {
-            if(process->extraStdinPipe)
+            if(process->extraStdinPipe >= 0)
                 os_ioevents_process_closePipeFD(process, process->extraStdinPipe);
-            if(process->extraStdoutPipe)
+            if(process->extraStdoutPipe >= 0)
                 os_ioevents_process_closePipeFD(process, process->extraStdoutPipe);
-            if(process->extraStderrPipe)
+            if(process->extraStderrPipe >= 0)
                 os_ioevents_process_closePipeFD(process, process->extraStderrPipe);
         }
 
@@ -620,74 +624,168 @@ os_ioevents_register_pipeForPolling(os_ioevents_context_t *context, int isReadPi
 #endif
     }
 }
-static os_ioevents_process_t *
-os_ioevents_process_forkForSpawn(os_ioevents_context_t *context, os_ioevents_process_spawn_flags_t flags, int *error)
+
+typedef struct os_ioevents_process_resource_initialization_state_s
 {
+    int masterPty;
+    int slavePty;
+    int extraMasterPty;
+    int extraSlavePty;
     int stdinPipe[2];
     int stdoutPipe[2];
     int stderrPipe[2];
     int extraStdinPipe[2];
     int extraStdoutPipe[2];
     int extraStderrPipe[2];
+} os_ioevents_process_resource_initialization_state_t;
+
+void
+os_ioevents_process_resource_initialization_state_clear(os_ioevents_process_resource_initialization_state_t *state)
+{
+    memset(state, -1, sizeof(os_ioevents_process_resource_initialization_state_t));
+}
+
+void
+os_ioevents_process_resource_initialization_state_abort(os_ioevents_process_resource_initialization_state_t *state)
+{
+    if(state->masterPty >= 0) close(state->masterPty);
+    if(state->slavePty >= 0) close(state->slavePty);
+    if(state->extraMasterPty >= 0) close(state->extraMasterPty);
+    if(state->extraSlavePty >= 0) close(state->extraSlavePty);
+
+    if(state->stdinPipe[0] >= 0) close(state->stdinPipe[0]);
+    if(state->stdinPipe[1] >= 0) close(state->stdinPipe[1]);
+    if(state->stdoutPipe[0] >= 0) close(state->stdoutPipe[0]);
+    if(state->stdoutPipe[1] >= 0) close(state->stdoutPipe[1]);
+    if(state->stderrPipe[0] >= 0) close(state->stderrPipe[0]);
+    if(state->stderrPipe[1] >= 0) close(state->stderrPipe[1]);
+
+    if(state->extraStdinPipe[0] >= 0) close(state->extraStdinPipe[0]);
+    if(state->extraStdinPipe[1] >= 0) close(state->extraStdinPipe[1]);
+    if(state->extraStdoutPipe[0] >= 0) close(state->extraStdoutPipe[0]);
+    if(state->extraStdoutPipe[1] >= 0) close(state->extraStdoutPipe[1]);
+    if(state->extraStderrPipe[0] >= 0) close(state->extraStderrPipe[0]);
+    if(state->extraStderrPipe[1] >= 0) close(state->extraStderrPipe[1]);
+}
+
+static os_ioevents_process_t *
+os_ioevents_process_forkForSpawn(os_ioevents_context_t *context, os_ioevents_process_spawn_flags_t flags, int *error)
+{
+    os_ioevents_process_resource_initialization_state_t initState;
+    os_ioevents_process_resource_initialization_state_clear(&initState);
+
+    int result;
 
     /* Create the pipes */
-    int result = pipe(stdinPipe);
-    if(result < 0)
+    int openPty = flags & OS_IOEVENTS_SPAWN_FLAGS_OPEN_IN_PSEUDO_TERMINAL;
+    if(openPty)
     {
-        *error = errno;
-        return NULL;
-    }
-
-    result = pipe(stdoutPipe);
-    if(result < 0)
-    {
-        *error = errno;
-        close(stdinPipe[0]); close(stdinPipe[1]);
-        return NULL;
-    }
-
-    result = pipe(stderrPipe);
-    if(result < 0)
-    {
-        *error = errno;
-        close(stdinPipe[0]); close(stdinPipe[1]);
-        close(stdoutPipe[0]); close(stdoutPipe[1]);
-        return NULL;
-    }
-
-    if(flags & OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES)
-    {
-        int result = pipe(extraStdinPipe);
-        if(result < 0)
+        initState.masterPty = posix_openpt(O_RDWR);
+        if(initState.masterPty < 0 || grantpt(initState.masterPty) != 0 || unlockpt(initState.masterPty) != 0)
         {
             *error = errno;
-            close(stdinPipe[0]); close(stdinPipe[1]);
-            close(stdoutPipe[0]); close(stdoutPipe[1]);
-            close(stderrPipe[0]); close(stderrPipe[1]);
+            os_ioevents_process_resource_initialization_state_abort(&initState);
             return NULL;
         }
 
-        result = pipe(extraStdoutPipe);
-        if(result < 0)
+        char *slavePtyName = ptsname(initState.masterPty);
+        if(!slavePtyName)
         {
             *error = errno;
-            close(stdinPipe[0]); close(stdinPipe[1]);
-            close(stdoutPipe[0]); close(stdoutPipe[1]);
-            close(stderrPipe[0]); close(stderrPipe[1]);
-            close(extraStdinPipe[0]); close(extraStdinPipe[1]);
+            os_ioevents_process_resource_initialization_state_abort(&initState);
             return NULL;
         }
 
-        result = pipe(extraStderrPipe);
+        initState.slavePty = open(slavePtyName, O_RDWR);
+        if(initState.slavePty < 0)
+        {
+            *error = errno;
+            os_ioevents_process_resource_initialization_state_abort(&initState);
+            return NULL;
+        }
+    }
+    else
+    {
+        result = pipe(initState.stdinPipe);
         if(result < 0)
         {
             *error = errno;
-            close(stdinPipe[0]); close(stdinPipe[1]);
-            close(stdoutPipe[0]); close(stdoutPipe[1]);
-            close(stderrPipe[0]); close(stderrPipe[1]);
-            close(extraStdinPipe[0]); close(extraStdinPipe[1]);
-            close(extraStdoutPipe[0]); close(extraStdoutPipe[1]);
+            os_ioevents_process_resource_initialization_state_abort(&initState);
             return NULL;
+        }
+
+        result = pipe(initState.stdoutPipe);
+        if(result < 0)
+        {
+            *error = errno;
+            os_ioevents_process_resource_initialization_state_abort(&initState);
+            return NULL;
+        }
+
+        result = pipe(initState.stderrPipe);
+        if(result < 0)
+        {
+            *error = errno;
+            os_ioevents_process_resource_initialization_state_abort(&initState);
+            return NULL;
+        }
+    }
+
+    int openExtraPipes = flags & OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES;
+    int openExtraPty = openExtraPipes && (flags & OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES_IN_PSEUDO_TERMINAL);
+    if(openExtraPipes)
+    {
+        if(openExtraPty)
+        {
+            initState.extraMasterPty = posix_openpt(O_RDWR);
+            if(initState.extraMasterPty < 0 || grantpt(initState.extraMasterPty) != 0 || unlockpt(initState.extraMasterPty) != 0)
+            {
+                *error = errno;
+                os_ioevents_process_resource_initialization_state_abort(&initState);
+                return NULL;
+            }
+
+            char *slavePtyName = ptsname(initState.extraMasterPty);
+            if(!slavePtyName)
+            {
+                *error = errno;
+                os_ioevents_process_resource_initialization_state_abort(&initState);
+                return NULL;
+            }
+
+            initState.extraSlavePty = open(slavePtyName, O_RDWR);
+            if(initState.extraSlavePty < 0)
+            {
+                *error = errno;
+                os_ioevents_process_resource_initialization_state_abort(&initState);
+                return NULL;
+            }
+        }
+        else
+        {
+            int result = pipe(initState.extraStdinPipe);
+            if(result < 0)
+            {
+                *error = errno;
+                os_ioevents_process_resource_initialization_state_abort(&initState);
+                return NULL;
+            }
+
+            result = pipe(initState.extraStdoutPipe);
+            if(result < 0)
+            {
+                *error = errno;
+                os_ioevents_process_resource_initialization_state_abort(&initState);
+                return NULL;
+            }
+
+            result = pipe(initState.extraStderrPipe);
+            if(result < 0)
+            {
+                *error = errno;
+                os_ioevents_process_resource_initialization_state_abort(&initState);
+                return NULL;
+            }
         }
     }
 
@@ -698,15 +796,7 @@ os_ioevents_process_forkForSpawn(os_ioevents_context_t *context, os_ioevents_pro
         /* This should not happen. */
         perror("Failed to fork\n");
         *error = errno;
-        close(stdinPipe[0]); close(stdinPipe[1]);
-        close(stdoutPipe[0]); close(stdoutPipe[1]);
-        close(stderrPipe[0]); close(stderrPipe[1]);
-        if(flags & OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES)
-        {
-            close(extraStdinPipe[0]); close(extraStdinPipe[1]);
-            close(extraStdoutPipe[0]); close(extraStdoutPipe[1]);
-            close(extraStderrPipe[0]); close(extraStderrPipe[1]);
-        }
+        os_ioevents_process_resource_initialization_state_abort(&initState);
         return NULL;
     }
 
@@ -714,30 +804,59 @@ os_ioevents_process_forkForSpawn(os_ioevents_context_t *context, os_ioevents_pro
     if(forkResult == 0)
     {
         /* Redirect the standard file descriptors to the pipes. */
-        result = dup2(stdinPipe[0], STDIN_FILENO); (void)result;
-        result = dup2(stdoutPipe[1], STDOUT_FILENO); (void)result;
-        result = dup2(stderrPipe[1], STDERR_FILENO); (void)result;
-        if(flags & OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES)
+        if(openPty)
         {
-            result = dup2(extraStdinPipe[0], 3); (void)result;
-            result = dup2(extraStdoutPipe[1], 4); (void)result;
-            result = dup2(extraStderrPipe[1], 5); (void)result;
+            close(initState.masterPty);
+            result = dup2(initState.slavePty, STDIN_FILENO); (void)result;
+            result = dup2(initState.slavePty, STDOUT_FILENO); (void)result;
+            result = dup2(initState.slavePty, STDERR_FILENO); (void)result;
+            close(initState.slavePty);
+            setsid();
+            ioctl(0, TIOCSCTTY, 1);
+        }
+        else
+        {
+            result = dup2(initState.stdinPipe[0], STDIN_FILENO); (void)result;
+            result = dup2(initState.stdoutPipe[1], STDOUT_FILENO); (void)result;
+            result = dup2(initState.stderrPipe[1], STDERR_FILENO); (void)result;
+
+            /* Close the unused endpoints from the pipes. */
+            close(initState.stdinPipe[0]); close(initState.stdinPipe[1]);
+            close(initState.stdoutPipe[0]); close(initState.stdoutPipe[1]);
+            close(initState.stderrPipe[0]); close(initState.stderrPipe[1]);
         }
 
-        /* Close the copies from the pipes. */
-        close(stdinPipe[0]); close(stdinPipe[1]);
-        close(stdoutPipe[0]); close(stdoutPipe[1]);
-        close(stderrPipe[0]); close(stderrPipe[1]);
-        if(flags & OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES)
+        if(openExtraPipes)
         {
-            close(extraStdinPipe[0]); close(extraStdinPipe[1]);
-            close(extraStdoutPipe[0]); close(extraStdoutPipe[1]);
-            close(extraStderrPipe[0]); close(extraStderrPipe[1]);
+            if(openExtraPty)
+            {
+                close(initState.extraMasterPty);
+                result = dup2(initState.extraSlavePty, 3); (void)result;
+                result = dup2(initState.extraSlavePty, 4); (void)result;
+                result = dup2(initState.extraSlavePty, 5); (void)result;
+                close(initState.extraSlavePty);
+                if(!openPty)
+                {
+                    setsid();
+                    ioctl(0, TIOCSCTTY, 3);
+                }
+            }
+            else
+            {
+                result = dup2(initState.extraStdinPipe[0], 3); (void)result;
+                result = dup2(initState.extraStdoutPipe[1], 4); (void)result;
+                result = dup2(initState.extraStderrPipe[1], 5); (void)result;
+
+                /* Close the unused endpoints from the pipes. */
+                close(initState.extraStdinPipe[0]); close(initState.extraStdinPipe[1]);
+                close(initState.extraStdoutPipe[0]); close(initState.extraStdoutPipe[1]);
+                close(initState.extraStderrPipe[0]); close(initState.extraStderrPipe[1]);
+            }
         }
 
         /* Close all the open file descriptors. */
         int inheritedPipes = 3;
-        if(flags & OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES)
+        if(openExtraPipes)
             inheritedPipes += 3;
         os_ioevents_process_closeAllOpenFileDescriptors(inheritedPipes);
         return NULL;
@@ -748,37 +867,67 @@ os_ioevents_process_forkForSpawn(os_ioevents_context_t *context, os_ioevents_pro
     process->flags = flags;
 
     /* We are the parent. Close the pipe endpoint that are unintesting to us. */
-    /* read */ close(stdinPipe[0]); process->stdinPipe = /* write */stdinPipe[1];
-    /* read */ process->stdoutPipe = stdoutPipe[0]; /* write */ close(stdoutPipe[1]);
-    /* read */ process->stderrPipe = stderrPipe[0]; /* write */ close(stderrPipe[1]);
-
-    if(flags & OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES)
+    if(openPty)
     {
-        /* read */ close(extraStdinPipe[0]); process->extraStdinPipe = /* write */extraStdinPipe[1];
-        /* read */ process->extraStdoutPipe = extraStdoutPipe[0]; /* write */ close(extraStdoutPipe[1]);
-        /* read */ process->extraStderrPipe = extraStderrPipe[0]; /* write */ close(extraStderrPipe[1]);
+        close(initState.slavePty);
+        process->stdioIsTTY = 1;
+        process->stdinPipe = initState.masterPty;
+        process->stdoutPipe = dup(initState.masterPty);
+        process->stderrPipe = -1;
+
+        /* Set non-blocking mode for stdout. */
+        fcntl(process->stdoutPipe, F_SETFL, fcntl(process->stdoutPipe, F_GETFL, 0) | O_NONBLOCK);
+        process->remainingPipes = 2;
+    }
+    else
+    {
+        process->stdioIsTTY = 0;
+        /* read */ close(initState.stdinPipe[0]); process->stdinPipe = /* write */initState.stdinPipe[1];
+        /* read */ process->stdoutPipe = initState.stdoutPipe[0]; /* write */ close(initState.stdoutPipe[1]);
+        /* read */ process->stderrPipe = initState.stderrPipe[0]; /* write */ close(initState.stderrPipe[1]);
+
+        /* Set non-blocking mode for stdout and stderr. */
+        fcntl(process->stdoutPipe, F_SETFL, fcntl(process->stdoutPipe, F_GETFL, 0) | O_NONBLOCK);
+        fcntl(process->stderrPipe, F_SETFL, fcntl(process->stderrPipe, F_GETFL, 0) | O_NONBLOCK);
+        process->remainingPipes = 3;
     }
 
-    /* Set non-blocking mode for stdout and stderr. */
-    fcntl(process->stdoutPipe, F_SETFL, fcntl(process->stdoutPipe, F_GETFL, 0) | O_NONBLOCK);
-    fcntl(process->stderrPipe, F_SETFL, fcntl(process->stderrPipe, F_GETFL, 0) | O_NONBLOCK);
-    process->remainingPipes = 3;
-
-    if(flags & OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES)
+    if(openExtraPipes)
     {
-        fcntl(process->extraStdoutPipe, F_SETFL, fcntl(process->extraStdoutPipe, F_GETFL, 0) | O_NONBLOCK);
-        fcntl(process->extraStderrPipe, F_SETFL, fcntl(process->extraStderrPipe, F_GETFL, 0) | O_NONBLOCK);
-        process->remainingPipes = 6;
+        if(openExtraPty)
+        {
+            process->extraStdioIsTTY = 1;
+            close(initState.extraSlavePty);
+            process->extraStdinPipe = initState.extraMasterPty;
+            process->extraStdoutPipe = dup(initState.extraMasterPty);
+            process->extraStderrPipe = -1;
+
+            /* Set non-blocking mode for stdout. */
+            fcntl(process->extraStdoutPipe, F_SETFL, fcntl(process->extraStdoutPipe, F_GETFL, 0) | O_NONBLOCK);
+            process->remainingPipes += 2;
+        }
+        else
+        {
+            process->extraStdioIsTTY = 0;
+            /* read */ close(initState.extraStdinPipe[0]); process->extraStdinPipe = /* write */initState.extraStdinPipe[1];
+            /* read */ process->extraStdoutPipe = initState.extraStdoutPipe[0]; /* write */ close(initState.extraStdoutPipe[1]);
+            /* read */ process->extraStderrPipe = initState.extraStderrPipe[0]; /* write */ close(initState.extraStderrPipe[1]);
+            fcntl(process->extraStdoutPipe, F_SETFL, fcntl(process->extraStdoutPipe, F_GETFL, 0) | O_NONBLOCK);
+            fcntl(process->extraStderrPipe, F_SETFL, fcntl(process->extraStderrPipe, F_GETFL, 0) | O_NONBLOCK);
+            process->remainingPipes += 3;
+        }
     }
 
     os_ioevents_register_pipeForPolling(context, 0, process->index, process->stdinPipe, OS_IOEVENTS_PIPE_INDEX_STDIN);
     os_ioevents_register_pipeForPolling(context, 1, process->index, process->stdoutPipe, OS_IOEVENTS_PIPE_INDEX_STDOUT);
-    os_ioevents_register_pipeForPolling(context, 1, process->index, process->stderrPipe, OS_IOEVENTS_PIPE_INDEX_STDERR);
+    if(!openPty)
+        os_ioevents_register_pipeForPolling(context, 1, process->index, process->stderrPipe, OS_IOEVENTS_PIPE_INDEX_STDERR);
     if(flags & OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES)
     {
         os_ioevents_register_pipeForPolling(context, 0, process->index, process->extraStdinPipe, OS_IOEVENTS_PIPE_INDEX_EXTRA_STDIN);
         os_ioevents_register_pipeForPolling(context, 1, process->index, process->extraStdoutPipe, OS_IOEVENTS_PIPE_INDEX_EXTRA_STDOUT);
-        os_ioevents_register_pipeForPolling(context, 1, process->index, process->extraStderrPipe, OS_IOEVENTS_PIPE_INDEX_EXTRA_STDERR);
+        if(!openExtraPty)
+            os_ioevents_register_pipeForPolling(context, 1, process->index, process->extraStderrPipe, OS_IOEVENTS_PIPE_INDEX_EXTRA_STDERR);
     }
 
     return process;
@@ -853,8 +1002,11 @@ os_ioevents_process_pipeHungUpOrError(os_ioevents_process_t *process, int pipeIn
     process->childPid = 0;
 
     /* There is no need to keep the stdin pipe. */
-    close(process->stdinPipe);
-    process->stdinPipe = 0;
+    if(process->stdinPipe >= 0)
+    {
+        close(process->stdinPipe);
+        process->stdinPipe = -1;
+    }
 
     /* Push a process finished event. */
     {
@@ -929,11 +1081,29 @@ os_ioevents_process_spawnShell(os_ioevents_context_t *context, const char *comma
 OS_IOEVENTS_CORE_EXPORT void
 os_ioevents_process_terminate(os_ioevents_process_t *process)
 {
+    if(!process)
+        return;
+
+    os_ioevents_context_t *context = process->context;
+    os_ioevents_mutex_lock(&context->io.processListMutex);
+    if(process->used && process->childPid)
+        kill(process->childPid, SIGTERM);
+
+    os_ioevents_mutex_unlock(&context->io.processListMutex);
 }
 
 OS_IOEVENTS_CORE_EXPORT void
 os_ioevents_process_kill(os_ioevents_process_t *process)
 {
+    if(!process)
+        return;
+
+    os_ioevents_context_t *context = process->context;
+    os_ioevents_mutex_lock(&context->io.processListMutex);
+    if(process->used && process->childPid)
+        kill(process->childPid, SIGKILL);
+
+    os_ioevents_mutex_unlock(&context->io.processListMutex);
 }
 
 OS_IOEVENTS_CORE_EXPORT intptr_t
@@ -946,7 +1116,7 @@ os_ioevents_process_pipe_read(os_ioevents_process_t *process, os_ioevents_pipe_i
 
     /* Get the pipe file descriptor. */
     int fd = process->pipes[pipe];
-    if(fd == 0)
+    if(fd < 0)
     {
         os_ioevents_mutex_unlock(&process->context->io.processListMutex);
         return OS_IOEVENTS_PIPE_ERROR_CLOSED;
@@ -957,18 +1127,23 @@ os_ioevents_process_pipe_read(os_ioevents_process_t *process, os_ioevents_pipe_i
     {
         result = read(fd, ((char*)buffer) + offset, count);
     } while(result < 0 && errno == EINTR);
+    int errorCode = errno;
 
-    if(errno == EWOULDBLOCK)
+    if(errorCode == EWOULDBLOCK)
         os_ioevents_process_setPipeReadPolling(1, process, pipe);
+    else if(errorCode == EIO)
+        os_ioevents_process_pipeHungUpOrError(process, pipe);
     os_ioevents_mutex_unlock(&process->context->io.processListMutex);
 
     /* Convert the error code. */
     if(result < 0)
     {
-        switch(errno)
+        switch(errorCode)
         {
         case EWOULDBLOCK:
             return OS_IOEVENTS_PIPE_ERROR_WOULD_BLOCK;
+        case EIO:
+            return OS_IOEVENTS_PIPE_ERROR_CLOSED;
         default:
             return OS_IOEVENTS_PIPE_ERROR;
         }
@@ -987,7 +1162,7 @@ os_ioevents_process_pipe_write(os_ioevents_process_t *process, os_ioevents_pipe_
 
     /* Get the pipe file descriptor. */
     int fd = process->pipes[pipe];
-    if(fd == 0)
+    if(fd < 0)
     {
         os_ioevents_mutex_unlock(&process->context->io.processListMutex);
         return OS_IOEVENTS_PIPE_ERROR_CLOSED;
@@ -998,16 +1173,20 @@ os_ioevents_process_pipe_write(os_ioevents_process_t *process, os_ioevents_pipe_
     {
         result = write(fd, ((char*)buffer) + offset, count);
     } while(result < 0 && errno == EINTR);
-
+    int errorCode = errno;
+    if(errorCode == EIO)
+        os_ioevents_process_pipeHungUpOrError(process, pipe);
     os_ioevents_mutex_unlock(&process->context->io.processListMutex);
 
     /* Convert the error code. */
     if(result < 0)
     {
-        switch(errno)
+        switch(errorCode)
         {
         case EWOULDBLOCK:
             return OS_IOEVENTS_PIPE_ERROR_WOULD_BLOCK;
+        case EIO:
+            return OS_IOEVENTS_PIPE_ERROR_CLOSED;
         default:
             return OS_IOEVENTS_PIPE_ERROR;
         }
@@ -1024,24 +1203,69 @@ os_ioevents_process_pipe_getNamedEndpoint(os_ioevents_process_t* process, os_ioe
 	return NULL;
 }
 
+OS_IOEVENTS_CORE_EXPORT int
+os_ioevents_process_pipe_isATTY(os_ioevents_process_t* process, os_ioevents_pipe_index_t pipe)
+{
+    if(!process)
+        return 0;
+
+    if(OS_IOEVENTS_PIPE_INDEX_STDIN <= pipe && pipe <= OS_IOEVENTS_PIPE_INDEX_STDOUT)
+        return process->stdioIsTTY;
+    if(OS_IOEVENTS_PIPE_INDEX_EXTRA_STDIN <= pipe && pipe <= OS_IOEVENTS_PIPE_INDEX_EXTRA_STDOUT)
+        return process->extraStdioIsTTY;
+
+    return 0;
+}
+
+
+OS_IOEVENTS_CORE_EXPORT int
+os_ioevents_process_pipe_setTTYWindowSize(os_ioevents_process_t* process, os_ioevents_pipe_index_t pipe, int rows, int columns)
+{
+    if(!process)
+        return 0;
+
+    if((OS_IOEVENTS_PIPE_INDEX_STDIN <= pipe && pipe <= OS_IOEVENTS_PIPE_INDEX_STDOUT && process->stdioIsTTY) ||
+       (OS_IOEVENTS_PIPE_INDEX_EXTRA_STDIN <= pipe && pipe <= OS_IOEVENTS_PIPE_INDEX_EXTRA_STDOUT && process->extraStdioIsTTY))
+    {
+        int masterPty = process->pipes[pipe];
+        if(masterPty >= 0)
+        {
+            struct winsize win = {};
+            if (ioctl(masterPty, TIOCGWINSZ, &win) != 0)
+            {
+            	if (errno != EINVAL)
+            		return 0;
+            }
+        	if (rows >= 0) win.ws_row = rows;
+        	if (columns >= 0) win.ws_col = columns;
+
+            if (ioctl(masterPty, TIOCSWINSZ, (char *)&win) != 0)
+                return 0;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 static void
 os_ioevents_process_destructor (void *arg)
 {
     os_ioevents_process_t *process = (os_ioevents_process_t*)arg;
     if(process->used)
     {
-        if(process->stdinPipe)
-            close(process->stdinPipe);
-        if(process->stdoutPipe)
-            close(process->stdoutPipe);
-        if(process->stderrPipe)
-            close(process->stderrPipe);
-        if(process->extraStdinPipe)
-            close(process->stdinPipe);
-        if(process->extraStdoutPipe)
-            close(process->stdoutPipe);
-        if(process->extraStderrPipe)
-            close(process->stderrPipe);
+        if(process->stdinPipe >= 0)
+            close(process->stdinPipe >= 0);
+        if(process->stdoutPipe >= 0)
+            close(process->stdoutPipe >= 0);
+        if(process->stderrPipe >= 0)
+            close(process->stderrPipe >= 0);
+        if(process->extraStdinPipe >= 0)
+            close(process->stdinPipe >= 0);
+        if(process->extraStdoutPipe >= 0)
+            close(process->stdoutPipe >= 0);
+        if(process->extraStderrPipe >= 0)
+            close(process->stderrPipe >= 0);
 
         if(process->childPid)
         {
