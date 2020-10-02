@@ -83,14 +83,23 @@ OSIOProcess >> initializeWithDriver: aDriver handle: aHandle flags: flags [
 	pipes := {
 		"stdin" OSIOProcessWritePipe forProcess: self index: 0 .
 		"stdout" OSIOProcessReadPipe forProcess: self index: 1 .
-		"stderr" OSIOProcessReadPipe forProcess: self index: 2
 	}.
+	(flags anyMask: OS_IOEVENTS_SPAWN_FLAGS_OPEN_IN_PSEUDO_TERMINAL) ifFalse: [ 
+		pipes := pipes , {
+			"stderr" OSIOProcessReadPipe forProcess: self index: 2
+		}.
+	].
 	(flags anyMask: OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES) ifTrue: [ 
 		pipes := pipes , {
 			"extra stdin" OSIOProcessWritePipe forProcess: self index: 3 .
-			"extra stdout" OSIOProcessReadPipe forProcess: self index: 4 .
-			"extra stderr" OSIOProcessReadPipe forProcess: self index: 5
+			"extra stdout" OSIOProcessReadPipe forProcess: self index: 4
 		}.
+		
+		(flags anyMask: OS_IOEVENTS_SPAWN_FLAGS_OPEN_EXTRA_PIPES_IN_PSEUDO_TERMINAL) ifFalse: [
+			pipes := pipes, {
+				"extra stderr" OSIOProcessReadPipe forProcess: self index: 5
+			}.
+		]
 	]
 ]
 

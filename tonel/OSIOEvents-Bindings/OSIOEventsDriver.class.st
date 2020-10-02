@@ -327,6 +327,11 @@ OSIOEventsDriver >> spawnShell: aCommand flags: flags [
 	^ process.
 ]
 
+{ #category : #process }
+OSIOEventsDriver >> spawnShellTTY: aCommand [
+	^ self spawnShell: aCommand flags: OS_IOEVENTS_SPAWN_FLAGS_OPEN_IN_PSEUDO_TERMINAL
+]
+
 { #category : #'file system' }
 OSIOEventsDriver >> watchDirectory: aPath eventHandler: eventHandler [
 	| result handle |

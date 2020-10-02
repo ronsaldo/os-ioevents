@@ -112,3 +112,8 @@ OSIOProcessReadPipe >> readInto: aBuffer startingAt: aBufferOffset count: n [
 OSIOProcessReadPipe >> textStream [
 	^ ZnCharacterReadStream on: self bufferedStream
 ]
+
+{ #category : #'as yet unclassified' }
+OSIOProcessReadPipe >> unbufferedTextStream [
+	^ ZnCharacterReadStream on: self
+]

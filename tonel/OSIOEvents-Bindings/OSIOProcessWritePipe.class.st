@@ -30,6 +30,11 @@ OSIOProcessWritePipe >> textStream [
 		yourself
 ]
 
+{ #category : #'as yet unclassified' }
+OSIOProcessWritePipe >> unbufferedTextStream [
+	^ ZnCharacterWriteStream on: self
+]
+
 { #category : #writing }
 OSIOProcessWritePipe >> write: n from: aBuffer [
 	^ self write: n from: aBuffer offset: 1

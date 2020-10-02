@@ -40,6 +40,16 @@ OSIOProcessPipe >> initializeForProcess: aProcess index: aPipeIndex [
 	processHasFinished := false.
 ]
 
+{ #category : #signalling }
+OSIOProcessPipe >> isATTY [
+	^ mutex critical: [
+		processHasFinished
+			ifTrue: [ false ]
+			ifFalse: [ process isPipeATTY: index ]
+	]
+
+]
+
 { #category : #testing }
 OSIOProcessPipe >> isBinary [
 	^ true
@@ -51,6 +61,16 @@ OSIOProcessPipe >> processFinished [
 		processHasFinished := true.
 		readyCondition signalAll.
 	].
+]
+
+{ #category : #signalling }
+OSIOProcessPipe >> setTerminalRows: rows columns: columns [
+	^ mutex critical: [
+		processHasFinished
+			ifTrue: [ false ]
+			ifFalse: [ process pipe: index setTTYRows: rows columns: columns ].
+	]
+
 ]
 
 { #category : #signalling }
