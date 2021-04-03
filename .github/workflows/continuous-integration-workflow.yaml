@@ -32,10 +32,6 @@ jobs:
             BUILD_MODE: ${{ matrix.variant.buildMode }}
             PROJECT_NAME: os-ioevents
         steps:
-            - name: Install dependencies linux
-              if: matrix.variant.os == 'ubuntu-latest'
-              run: sudo apt-get -qqy install libx11-xcb-dev libvulkan-dev
-
             - uses: actions/checkout@v1
 
             - name: CI Build
