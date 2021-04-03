@@ -17,7 +17,7 @@ LibOSIOEvents class >> isAvailable [
 
 { #category : #'library downloading' }
 LibOSIOEvents >> fetchLibrary [
-	PhaNAPIBintray fetchLibrary: 'os-ioevents' fromIcebergRepoOfClass: self class
+	PhaNAPIGitHubRelease fetchLibrary: 'os-ioevents' fromIcebergRepoOfClass: self class
 
 ]
 
