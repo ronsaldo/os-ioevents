@@ -16,6 +16,10 @@ set(CMAKE_INSTALL_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/dist")
 set(OSIOEvents_DATA_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/dist/data")
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/;${CMAKE_MODULE_PATH}")
 
+if(APPLE)
+	set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
+endif()
+
 # Turn warnings and use C99.
 if (${CMAKE_C_COMPILER_ID} STREQUAL MSVC)
 	# using Visual Studio
